@@ -15,6 +15,7 @@
 #include <unistd.h>
 
 ssize_t readline(int cfd, char *str, size_t n);
+int newclient();
 
 int main(void)
 {
@@ -34,7 +35,7 @@ int main(void)
     assert(result != -1, "failed to bind socket to an address");
 
     char addrstr[INET_ADDRSTRLEN] = {0};
-    assert(inet_ntop(AF_INET, (void *)&sa.sin_addr, addrstr, INET_ADDRSTRLEN) != NULL, "failed to conver the address to string");
+    assert(inet_ntop(AF_INET, (void *)&sa.sin_addr, addrstr, INET_ADDRSTRLEN) != NULL, "failed to convert the address to string");
 
     info("Serving the server on: %s:%d", addrstr, port);
 
@@ -54,28 +55,34 @@ int main(void)
             error("failed on poll syscall");
             continue;
         }
+        info("Ready to read some poll events");
 
         if (pl->data[0].revents & POLLIN) {
             // ----------- Handle Client Messages ----------------
-            info("A new client connected");
 
             int cfd = accept(sfd, NULL, NULL);
-            if (readline(cfd, buf, 64) == -1) {
-                error("failed to read line from client socket");
-                goto conn;
+            if (cfd == -1) {
+                error("error on accept syscall");
             }
 
-            char *nl = strchr(buf, '\n');
-            if (nl) *nl = '\0';
+            struct pollfd pfd = {.fd = cfd, .events = POLLIN | POLLHUP};
+            pl = pl_append(pl, pfd);
 
-            info("received message: %s", buf);
-            if (send(cfd, "OK\n", 3, 0) == -1) {
-                error("failed to write to client socket");
-                goto conn;
-            }
-        conn:
-            close(cfd);
-            memset(buf, 0, 64);
+            info("A new client connected: %d", cfd);
+
+            /* if (readline(cfd, buf, 64) == -1) { */
+            /*     error("failed to read line from client socket"); */
+            /*     goto conn; */
+            /* } */
+
+            /* char *nl = strchr(buf, '\n'); */
+            /* if (nl) *nl = '\0'; */
+
+            /* info("received message: %s", buf); */
+            /* if (send(cfd, "OK\n", 3, 0) == -1) { */
+            /*     error("failed to write to client socket"); */
+            /*     goto conn; */
+            /* } */
         }
 
         if (pl->data[1].revents & POLLIN) {
@@ -87,6 +94,36 @@ int main(void)
 
             info("Got your input from STDIN: %.*s", 64, buf);
             memset(buf, 0, 64);
+        }
+
+        for (size_t i = 2; i < pl->len; i++) {
+            struct pollfd pfd = pl->data[i];
+            if (pfd.revents & POLLIN) {
+                if (recv(pfd.fd, buf, sizeof(buf), 0) == -1) {
+                    error("recv");
+                    continue;
+                }
+                info("'%d' received message from: %.*s", pfd.fd, 64, buf);
+
+                /* if (readline(cfd, buf, 64) == -1) { */
+                /*     error("failed to read line from client socket"); */
+                /*     goto conn; */
+                /* } */
+
+                /* char *nl = strchr(buf, '\n'); */
+                /* if (nl) *nl = '\0'; */
+
+                info("received message: %s", buf);
+                if (send(pfd.fd, "OK\n", 3, 0) == -1) {
+                    error("failed to write to client socket");
+                    continue;
+                }
+            }
+            if (pfd.revents & POLLHUP) {
+                info("closing connection for client fd: %d", pfd.fd);
+                close(pfd.fd);
+                if (pl_remove(pl, pfd) == -1) error("pl_remove");
+            }
         }
     }
 

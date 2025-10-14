@@ -13,8 +13,7 @@ struct plist {
 
 struct plist *pl_init(size_t init_len);
 struct plist *pl_append(struct plist *pl, struct pollfd pfd);
-ssize_t pl_find(struct plist *pl, struct pollfd pfd);
-struct plist *pl_remove(struct plist *pl, size_t index);
+int pl_remove(struct plist *pl, struct pollfd pfd);
 void pl_free(struct plist *pl);
 
 #endif
