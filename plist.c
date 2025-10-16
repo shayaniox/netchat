@@ -50,8 +50,9 @@ int pl_remove(struct plist *pl, struct pollfd pfd)
         return -1;
     }
     size_t count = (pl->len - 1) - index;
-    if (count && memcpy(pl->data + index, pl->data + index + 1, sizeof(struct pollfd) * count) == NULL)
-        return -1;
+    if (count)
+        memmove(&pl->data[index], &pl->data[index + 1], count * sizeof(struct pollfd));
+
     pl->len--;
     memset(pl->data + pl->len, 0, sizeof(struct pollfd));
     return 0;

@@ -12,10 +12,12 @@
 #include <string.h>
 #include <sys/poll.h>
 #include <sys/socket.h>
+#include <sys/types.h>
 #include <unistd.h>
 
+const char *ACKMESSAGE = "Received your message\n";
+
 ssize_t readline(int cfd, char *str, size_t n);
-int newclient();
 
 int main(void)
 {
@@ -43,10 +45,10 @@ int main(void)
     struct plist *pl = pl_init(32);
     assert(pl != NULL, "failed to initialize poll list");
 
-    pl->data[0].fd = sfd;
-    pl->data[0].events = POLLIN;
-    pl->data[1].fd = STDIN_FILENO;
-    pl->data[1].events = POLLIN;
+    struct pollfd pfd = {.fd = sfd, .events = POLLIN};
+    pl_append(pl, pfd);
+    pfd = (struct pollfd){.fd = STDIN_FILENO, .events = POLLIN};
+    pl_append(pl, pfd);
 
     char buf[64] = {0};
     while (1) {
@@ -55,7 +57,6 @@ int main(void)
             error("failed on poll syscall");
             continue;
         }
-        info("Ready to read some poll events");
 
         if (pl->data[0].revents & POLLIN) {
             // ----------- Handle Client Messages ----------------
@@ -67,22 +68,6 @@ int main(void)
 
             struct pollfd pfd = {.fd = cfd, .events = POLLIN | POLLHUP};
             pl = pl_append(pl, pfd);
-
-            info("A new client connected: %d", cfd);
-
-            /* if (readline(cfd, buf, 64) == -1) { */
-            /*     error("failed to read line from client socket"); */
-            /*     goto conn; */
-            /* } */
-
-            /* char *nl = strchr(buf, '\n'); */
-            /* if (nl) *nl = '\0'; */
-
-            /* info("received message: %s", buf); */
-            /* if (send(cfd, "OK\n", 3, 0) == -1) { */
-            /*     error("failed to write to client socket"); */
-            /*     goto conn; */
-            /* } */
         }
 
         if (pl->data[1].revents & POLLIN) {
@@ -96,27 +81,53 @@ int main(void)
             memset(buf, 0, 64);
         }
 
-        for (size_t i = 2; i < pl->len; i++) {
+        for (size_t i = pl->len - 1; i >= 2; i--) {
+            var("%ld", i);
+
             struct pollfd pfd = pl->data[i];
             if (pfd.revents & POLLIN) {
-                if (recv(pfd.fd, buf, sizeof(buf), 0) == -1) {
-                    error("recv");
+                ssize_t n = recv(pfd.fd, buf, sizeof(buf), 0);
+                var("%ld", n);
+
+                if (n == 0) {
+                    info("closing connection for client fd: %d", pfd.fd);
+                    close(pfd.fd);
+                    if (pl_remove(pl, pfd) == -1) error("pl_remove");
                     continue;
                 }
-                info("'%d' received message from: %.*s", pfd.fd, 64, buf);
+                else if (n == -1) {
+                    perror("recv");
+                    close(pfd.fd);
+                    if (pl_remove(pl, pfd) == -1) error("pl_remove");
+                    continue;
+                }
 
-                /* if (readline(cfd, buf, 64) == -1) { */
-                /*     error("failed to read line from client socket"); */
-                /*     goto conn; */
-                /* } */
-
+                // TODO: copy the buf to another one to log it
                 /* char *nl = strchr(buf, '\n'); */
                 /* if (nl) *nl = '\0'; */
 
-                info("received message: %s", buf);
-                if (send(pfd.fd, "OK\n", 3, 0) == -1) {
-                    error("failed to write to client socket");
-                    continue;
+                info("received from: [%d], message: %.*s", pfd.fd, 64, buf);
+
+                // --------------- Send message to the sender ---------------
+
+                ssize_t numwrite = send(pfd.fd, ACKMESSAGE, strlen(ACKMESSAGE), MSG_NOSIGNAL);
+                var("%ld", numwrite);
+                if (numwrite == -1) {
+                    perror("send");
+                    exit(EXIT_FAILURE);
+                }
+
+                // ----------------- Broadcast Message -------------------
+                for (ssize_t j = pl->len - 1; j >= 2; j--) {
+                    if (pl->data[j].fd == pfd.fd)
+                        continue;
+
+                    ssize_t numwrite = send(pl->data[j].fd, buf, 64, MSG_NOSIGNAL);
+                    var("%ld", numwrite);
+                    if (numwrite == -1) {
+                        perror("send");
+                        exit(EXIT_FAILURE);
+                    }
                 }
             }
             if (pfd.revents & POLLHUP) {
