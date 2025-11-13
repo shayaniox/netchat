@@ -1,4 +1,5 @@
 #include "check.h"
+#include "errfunc.h"
 #include "list.h"
 #include "log.h"
 #include "plist.h"
@@ -31,7 +32,7 @@ int main(void)
     struct sockaddr_in sa;
     sa.sin_port = ntohs(port);
     sa.sin_family = AF_INET;
-    sa.sin_addr.s_addr = ntohl(INADDR_LOOPBACK);
+    sa.sin_addr.s_addr = ntohl(INADDR_ANY);
 
     int result = bind(sfd, (struct sockaddr *)&sa, sizeof(struct sockaddr_in));
     assert(result != -1, "failed to bind socket to an address");
@@ -50,7 +51,8 @@ int main(void)
     pfd = (struct pollfd){.fd = STDIN_FILENO, .events = POLLIN};
     pl_append(pl, pfd);
 
-    char buf[64] = {0};
+    int numread = 0;
+    char buf[1024] = {0};
     while (1) {
         int ready = poll(pl->data, pl->len, -1);
         if (ready == -1) {
@@ -71,14 +73,15 @@ int main(void)
         }
 
         if (pl->data[1].revents & POLLIN) {
-            fgets(buf, sizeof(buf), stdin);
+            numread = read(STDIN_FILENO, buf, sizeof(buf) - 1);
+            if (numread == -1)
+                err_exit("read from stdin");
             char *nl = strchr(buf, '\n');
             if (nl) *nl = '\0';
             tup(1);
             tclr();
 
-            info("Got your input from STDIN: %.*s", 64, buf);
-            memset(buf, 0, 64);
+            info("Got your input from STDIN: %.*s", 1024, buf);
         }
 
         for (size_t i = pl->len - 1; i >= 2; i--) {
@@ -106,12 +109,12 @@ int main(void)
                 /* char *nl = strchr(buf, '\n'); */
                 /* if (nl) *nl = '\0'; */
 
-                info("received from: [%d], message: %.*s", pfd.fd, 64, buf);
+                info("received from: [%d], message: %.*s", pfd.fd, 1024, buf);
 
                 // --------------- Send message to the sender ---------------
 
                 ssize_t numwrite = send(pfd.fd, ACKMESSAGE, strlen(ACKMESSAGE), MSG_NOSIGNAL);
-                var("%ld", numwrite);
+                var("to sender: %ld", numwrite);
                 if (numwrite == -1) {
                     perror("send");
                     exit(EXIT_FAILURE);
@@ -122,13 +125,14 @@ int main(void)
                     if (pl->data[j].fd == pfd.fd)
                         continue;
 
-                    ssize_t numwrite = send(pl->data[j].fd, buf, 64, MSG_NOSIGNAL);
-                    var("%ld", numwrite);
+                    ssize_t numwrite = send(pl->data[j].fd, buf, n, MSG_NOSIGNAL);
                     if (numwrite == -1) {
                         perror("send");
                         exit(EXIT_FAILURE);
                     }
                 }
+
+                memset(buf, 0, 1024);
             }
             if (pfd.revents & POLLHUP) {
                 info("closing connection for client fd: %d", pfd.fd);
