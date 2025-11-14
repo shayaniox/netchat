@@ -19,6 +19,7 @@
 
 int get_cursor_pos(int *row, int *column);
 void move_cursor(int row, int column);
+void scroll(int n);
 
 #define shift(N) printf("\033[%dL", N)
 

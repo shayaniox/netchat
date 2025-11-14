@@ -1,5 +1,6 @@
 #include "tutil.h"
 #include <stdio.h>
+#include <sys/ioctl.h>
 #include <termios.h>
 #include <unistd.h>
 
@@ -28,4 +29,10 @@ void move_cursor(int row, int column)
 {
     printf("\033[%d;%dH", row, column);
     fflush(stdout);
+}
+
+void scroll(int n)
+{
+    for (int i = 0; i < n; i++)
+        putchar('\n');
 }

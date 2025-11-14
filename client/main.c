@@ -9,6 +9,7 @@
 #include <netinet/ip.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/ioctl.h>
 #include <sys/poll.h>
 #include <sys/socket.h>
 #include <unistd.h>
@@ -102,8 +103,20 @@ int server_message(struct box *srv_box, char *buf, size_t buflen)
     int row, column;
     get_cursor_pos(&row, &column);
 
+    // Scroll if needed more lines
+    struct winsize w;
+    ioctl(STDOUT_FILENO, TIOCGWINSZ, &w);
+    if (w.ws_row - row < 3) {
+        log_file("before>> w row: %d, row: %d\n", w.ws_row, row);
+        move_cursor(w.ws_row, 1);
+        scroll(3 - (w.ws_row - row));
+        row -= 3 - (w.ws_row - row);
+        move_cursor(row, 1);
+        log_file("after>> w row: %d, row: %d\n", w.ws_row, row);
+    }
+
     srv_box->row = row;
-    srv_box->column = column;
+    srv_box->column = 1;
     str_set(srv_box->text, buf, buflen);
 
     shift(3);
