@@ -11,7 +11,7 @@
 
 #define pchr(X) printf("%s", X)
 
-struct box *box_init(int row, int column, string_t text)
+struct box *box_init(int row, int column, string_t text, const char *color)
 {
     struct box *b = malloc(sizeof(struct box));
     if (b == NULL)
@@ -20,16 +20,16 @@ struct box *box_init(int row, int column, string_t text)
     b->row = row <= 0 ? 1 : row;
     b->column = column <= 0 ? 1 : column;
     b->text = text;
+    b->color = color;
 
     return b;
 }
 
 void box_draw(struct box *b)
 {
-    color(green);
+    color(b->color);
     pchr(UL);
 
-    log_file("text len: %d\n", b->text->len);
     for (size_t i = 0; i < b->text->len; i++)
         pchr(H);
     pchr(UR);
@@ -53,7 +53,7 @@ void box_addcolumn(struct box *b, char ch)
 {
     str_append(b->text, &ch, 1);
 
-    color(green);
+    color(b->color);
 
     // Add the character
     move_cursor(b->row, b->column + b->text->len);
@@ -85,7 +85,7 @@ void box_addcolumn(struct box *b, char ch)
 
 void box_done(struct box *b)
 {
-    color(green);
+    color(b->color);
 
     move_cursor(b->row, b->column + b->text->len + 1);
     pchr(UR);
@@ -102,6 +102,8 @@ void box_done(struct box *b)
     putchar(' ');
 
     color(nc);
+
+    fflush(stdout);
 }
 
 void box_new(struct box *b)
@@ -125,4 +127,32 @@ void box_new(struct box *b)
     }
     str_clear(b->text);
     move_cursor(b->row, b->column);
+}
+
+void box_draw_input(struct box *b)
+{
+    color(b->color);
+
+    move_cursor(b->row, b->column);
+
+    pchr(UL);
+    for (size_t i = 0; i < b->text->len + 1; i++)
+        pchr(H);
+    pchr(UR);
+
+    move_cursor(b->row + 1, b->column);
+
+    pchr(V);
+    printf("%.*s", (int)(b->text->len), b->text->data);
+    putchar(' ');
+    pchr(V);
+
+    move_cursor(b->row + 2, b->column);
+
+    pchr(LL);
+    for (size_t i = 0; i < b->text->len + 1; i++)
+        pchr(H);
+    pchr(LR);
+
+    color(nc);
 }

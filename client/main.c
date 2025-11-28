@@ -1,23 +1,123 @@
+#define _POSIX_C_SOURCE 200809L
 #include "box.h"
 #include "check.h"
+#include "colors.h"
+#include "errfunc.h"
 #include "estring.h"
 #include "log.h"
+#include "modes.h"
 #include "tutil.h"
 #include <arpa/inet.h>
 #include <errno.h>
 #include <netinet/in.h>
 #include <netinet/ip.h>
+#include <signal.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/ioctl.h>
 #include <sys/poll.h>
 #include <sys/socket.h>
+#include <termios.h>
 #include <unistd.h>
 
-int server_message(struct box *srv_box, char *buf, size_t buflen);
+struct termios usertp;
+
+static void handler(int sig)
+{
+    (void)sig;
+    scroll(2);
+
+    if (tcsetattr(STDIN_FILENO, TCSAFLUSH, &usertp) == -1)
+        err_exit("tcsetattr");
+
+    exit(EXIT_SUCCESS);
+}
+
+static void tstp_handler(int sig)
+{
+    (void)sig;
+    scroll(2);
+
+    int saved_errno = errno;
+
+    struct termios tp;
+    if (tcgetattr(STDIN_FILENO, &tp) == -1)
+        err_exit("tcgetattr");
+
+    if (tcsetattr(STDIN_FILENO, TCSAFLUSH, &usertp) == -1)
+        err_exit("tcsetattr");
+
+    if (signal(SIGTSTP, SIG_DFL) == SIG_ERR)
+        err_exit("signal");
+
+    raise(SIGTSTP);
+
+    sigset_t tstp_mask, prev_mask;
+    if (sigprocmask(SIG_UNBLOCK, &tstp_mask, &prev_mask) == -1)
+        err_exit("sigprocmask unblock");
+
+    if (sigprocmask(SIG_SETMASK, &prev_mask, NULL) == -1)
+        err_exit("sigprocmask setmask");
+
+    struct sigaction sa;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_handler = SIG_DFL;
+    sa.sa_flags = SA_RESTART;
+    if (sigaction(SIGTSTP, &sa, NULL) == -1)
+        err_exit("sigaction");
+
+    if (tcgetattr(STDIN_FILENO, &usertp) == -1)
+        err_exit("tcgetattr");
+
+    if (tcsetattr(STDIN_FILENO, TCSAFLUSH, &tp) == -1)
+        err_exit("tcsetattr");
+
+    errno = saved_errno;
+}
+
+int user_input(struct box *usr_box, char ch, int sfd);
+int server_message(struct box *srv_box, struct box *usr_box, char *buf, size_t buflen);
 
 int main(void)
 {
+    if (ttySetCbreak(STDIN_FILENO, &usertp) == -1)
+        err_exit("ttySetCbreak");
+
+    struct sigaction sa, prev;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_handler = handler;
+    sa.sa_flags = SA_RESTART;
+    if (sigaction(SIGQUIT, NULL, &prev) == -1)
+        err_exit("sigaction SIGQUIT");
+    if (prev.sa_handler != SIG_IGN)
+        if (sigaction(SIGQUIT, &sa, NULL) == -1)
+            err_exit("sigaction SIGQUIT");
+
+    if (sigaction(SIGINT, NULL, &prev) == -1)
+        err_exit("sigaction SIGINT");
+    if (prev.sa_handler != SIG_IGN)
+        if (sigaction(SIGINT, &sa, NULL) == -1)
+            err_exit("sigaction SIGINT");
+
+    sa.sa_handler = tstp_handler;
+    if (sigaction(SIGTSTP, NULL, &prev) == -1)
+        err_exit("sigaction SIGTSTP");
+    if (prev.sa_handler != SIG_IGN)
+        if (sigaction(SIGTSTP, &sa, NULL) == -1)
+            err_exit("sigaction SIGTSTP");
+
+    int row, column;
+    get_cursor_pos(&row, &column);
+
+    string_t str = str_init();
+    struct box *svr_box = box_init(row, column, str, green);
+
+    string_t user_str = str_init();
+    struct box *input_box = box_init(row, 1, user_str, blue);
+
+    box_draw_input(input_box);
+    move_cursor(input_box->row + 1, input_box->column + input_box->text->len + 1);
+
     int sfd = socket(AF_INET, SOCK_STREAM, 0);
     assert(sfd >= 0, "socket");
 
@@ -37,14 +137,8 @@ int main(void)
     pfds[1].events = POLLIN | POLLHUP;
 
     int nread, nserv;
-    char stdin_buf[1024] = {0};
+    char ch;
     char servr_buf[1024] = {0};
-
-    int row, column;
-    get_cursor_pos(&row, &column);
-
-    string_t str = str_init();
-    struct box *svr_box = box_init(row, column, str);
 
     while (1) {
         int ready = poll(pfds, 2, -1);
@@ -55,16 +149,12 @@ int main(void)
         }
 
         if (pfds[0].revents & POLLIN) {
-            nread = read(STDIN_FILENO, stdin_buf, sizeof(stdin_buf) - 1);
+            nread = read(STDIN_FILENO, &ch, 1);
             if (nread == -1) {
                 close(sfd);
                 err_exit("read from stdin");
             }
-            if (stdin_buf[0] != 0 && send(sfd, stdin_buf, nread, MSG_DONTWAIT) == -1) {
-                if (!(errno == EAGAIN || errno == EWOULDBLOCK))
-                    error("write to socket");
-            }
-            memset(stdin_buf, 0, nread);
+            user_input(input_box, ch, sfd);
         }
 
         if (pfds[1].revents & POLLIN) {
@@ -83,7 +173,8 @@ int main(void)
                 nserv -= 1;
             }
 
-            server_message(svr_box, servr_buf, nserv);
+            server_message(svr_box, input_box, servr_buf, nserv);
+
             memset(servr_buf, 0, nserv);
         }
         if (pfds[1].revents & POLLHUP) {
@@ -92,38 +183,85 @@ int main(void)
         }
     }
 
+    if (tcsetattr(STDIN_FILENO, TCSAFLUSH, &usertp) == -1)
+        err_exit("tcsetattr");
+
     return EXIT_SUCCESS;
 }
 
-int server_message(struct box *srv_box, char *buf, size_t buflen)
+int server_message(struct box *srv_box, struct box *usr_box, char *buf, size_t buflen)
 {
+    // TODO: remove
+    (void)usr_box;
+
     if (srv_box == NULL)
         return EINVAL;
 
     int row, column;
     get_cursor_pos(&row, &column);
 
+    row = usr_box->row + 2;
+
     // Scroll if needed more lines
     struct winsize w;
     ioctl(STDOUT_FILENO, TIOCGWINSZ, &w);
     if (w.ws_row - row < 3) {
-        log_file("before>> w row: %d, row: %d\n", w.ws_row, row);
         move_cursor(w.ws_row, 1);
         scroll(3 - (w.ws_row - row));
-        row -= 3 - (w.ws_row - row);
-        move_cursor(row, 1);
-        log_file("after>> w row: %d, row: %d\n", w.ws_row, row);
+        usr_box->row -= 3 - (w.ws_row - row);
     }
 
-    srv_box->row = row;
+    srv_box->row = usr_box->row;
     srv_box->column = 1;
     str_set(srv_box->text, buf, buflen);
 
+    move_cursor(usr_box->row, 1);
     shift(3);
 
-    move_cursor(row, 1);
     box_draw(srv_box);
-    move_cursor(row + 3, column);
+
+    usr_box->row += 3;
+    move_cursor(usr_box->row + 1, column);
+
+    return 0;
+}
+
+int user_input(struct box *input_box, char ch, int sfd)
+{
+    if (input_box == NULL)
+        return EINVAL;
+
+    if (ch != '\r') {
+        box_addcolumn(input_box, ch);
+        return 0;
+    }
+
+    box_done(input_box);
+
+    if (input_box->text->len > 0 &&
+        send(sfd, input_box->text->data, input_box->text->len, MSG_DONTWAIT) == -1)
+        if (!(errno == EAGAIN || errno == EWOULDBLOCK))
+            error("write to socket");
+
+    int row = input_box->row + 2;
+
+    // Scroll if needed more lines
+    struct winsize w;
+    ioctl(STDOUT_FILENO, TIOCGWINSZ, &w);
+    if (w.ws_row - row < 3) {
+        move_cursor(w.ws_row, 1);
+        scroll(3 - (w.ws_row - row));
+        row = w.ws_row - 2;
+    }
+    else {
+        row = input_box->row + 3;
+    }
+
+    str_clear(input_box->text);
+    input_box->row = row;
+    input_box->column = 1;
+    box_draw_input(input_box);
+    move_cursor(input_box->row + 1, input_box->column + input_box->text->len + 1);
 
     return 0;
 }
