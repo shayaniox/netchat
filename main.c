@@ -6,6 +6,7 @@
 #include "termutil.h"
 #include <arpa/inet.h>
 #include <errno.h>
+#include <getopt.h>
 #include <netinet/in.h>
 #include <poll.h>
 #include <stdio.h>
@@ -18,9 +19,67 @@
 
 const char *ACKMESSAGE = "Received your message\n";
 
+struct config {
+    char *host;
+    int port;
+    int is_server;
+};
+
 ssize_t readline(int cfd, char *str, size_t n);
 
-int main(void)
+void print_usage(char *prog_name)
+{
+    fprintf(stderr, "Usage:\n");
+    fprintf(stderr, "  %s client -h <host> -p <port>\n", prog_name);
+    fprintf(stderr, "  %s server -h <host> -p <port>\n", prog_name);
+    fprintf(stderr, "\nOptions:\n");
+    fprintf(stderr, "  -h <host>    Host/IP address\n");
+    fprintf(stderr, "  -p <port>    Port number\n");
+    fprintf(stderr, "\nExamples:\n");
+    fprintf(stderr, "  %s client -h 127.0.0.1 -p 8080\n", prog_name);
+    fprintf(stderr, "  %s server -h 0.0.0.0 -p 8080\n", prog_name);
+}
+
+int parse_args(int argc, char *argv[], struct config *cfg)
+{
+    if (argc < 2) {
+        print_usage(argv[0]);
+        return -1;
+    }
+
+    if (strcmp(argv[1], "server")) {
+        cfg->is_server = 1;
+    }
+    else if (strcmp(argv[1], "client")) {
+        cfg->is_server = 0;
+    }
+    else {
+        fprintf(stderr, "Error: Invalid mode '%s'. Must be 'client' or 'server'\n", argv[1]);
+        print_usage(argv[0]);
+        return -1;
+    }
+
+    int opt;
+    optind = 2;
+    for (; (opt = getopt(argc, argv, "h:p:")) != -1;) {
+        switch (opt) {
+        case 'h':
+            cfg->host = optarg;
+            break;
+        case 'p':
+            cfg->port = atoi(optarg);
+            if (cfg->port <= 0)
+                err_exit("Port option must be numeric");
+        default:
+            print_usage(argv[0]);
+            exit(EXIT_FAILURE);
+        }
+    }
+
+    return 0;
+}
+
+int main(int argc, char *argv[])
 {
     int sfd = socket(AF_INET, SOCK_STREAM, 0);
     assert(sfd >= 0, "failed to create a socket file");
