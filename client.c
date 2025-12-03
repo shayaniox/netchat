@@ -1,4 +1,5 @@
 #define _POSIX_C_SOURCE 200809L
+
 #include "box.h"
 #include "check.h"
 #include "colors.h"
@@ -25,6 +26,7 @@ struct termios usertp;
 static void handler(int sig)
 {
     (void)sig;
+
     scroll(2);
 
     if (tcsetattr(STDIN_FILENO, TCSAFLUSH, &usertp) == -1)
@@ -36,6 +38,7 @@ static void handler(int sig)
 static void tstp_handler(int sig)
 {
     (void)sig;
+
     scroll(2);
 
     int saved_errno = errno;
@@ -78,33 +81,42 @@ static void tstp_handler(int sig)
 int user_input(struct box *usr_box, char ch, int sfd);
 int server_message(struct box *srv_box, struct box *usr_box, char *buf, size_t buflen);
 
-int main(void)
+int client_run(const char *host, int port)
 {
-    if (ttySetCbreak(STDIN_FILENO, &usertp) == -1)
-        err_exit("ttySetCbreak");
+
+    int sfd = socket(AF_INET, SOCK_STREAM, 0);
+    check(sfd >= 0, "socket");
+
+    unsigned char hostaddr[sizeof(struct in_addr)];
+    check(inet_pton(AF_INET, host, hostaddr) == 1, "failed to convert host to address");
+
+    struct sockaddr_in addr = {0};
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(port);
+    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+
+    int result = connect(sfd, (struct sockaddr *)&addr, sizeof(struct sockaddr_in));
+    check(result != -1, "connect");
+
+    check(ttySetCbreak(STDIN_FILENO, &usertp) == -1, "ttySetCbreak");
 
     struct sigaction sa, prev;
     sigemptyset(&sa.sa_mask);
     sa.sa_handler = handler;
     sa.sa_flags = SA_RESTART;
-    if (sigaction(SIGQUIT, NULL, &prev) == -1)
-        err_exit("sigaction SIGQUIT");
-    if (prev.sa_handler != SIG_IGN)
-        if (sigaction(SIGQUIT, &sa, NULL) == -1)
-            err_exit("sigaction SIGQUIT");
 
-    if (sigaction(SIGINT, NULL, &prev) == -1)
-        err_exit("sigaction SIGINT");
+    check(sigaction(SIGQUIT, NULL, &prev) == -1, "sigaction SIGQUIT");
     if (prev.sa_handler != SIG_IGN)
-        if (sigaction(SIGINT, &sa, NULL) == -1)
-            err_exit("sigaction SIGINT");
+        check(sigaction(SIGQUIT, &sa, NULL) == -1, "sigaction SIGQUIT");
+
+    check(sigaction(SIGINT, NULL, &prev) == -1, "sigaction SIGINT");
+    if (prev.sa_handler != SIG_IGN)
+        check(sigaction(SIGINT, &sa, NULL) == -1, "sigaction SIGINT");
 
     sa.sa_handler = tstp_handler;
-    if (sigaction(SIGTSTP, NULL, &prev) == -1)
-        err_exit("sigaction SIGTSTP");
+    check(sigaction(SIGTSTP, NULL, &prev) == -1, "sigaction SIGTSTP");
     if (prev.sa_handler != SIG_IGN)
-        if (sigaction(SIGTSTP, &sa, NULL) == -1)
-            err_exit("sigaction SIGTSTP");
+        check(sigaction(SIGTSTP, &sa, NULL) == -1, "sigaction SIGTSTP");
 
     int row, column;
     get_cursor_pos(&row, &column);
@@ -117,18 +129,6 @@ int main(void)
 
     box_draw_input(input_box);
     move_cursor(input_box->row + 1, input_box->column + input_box->text->len + 1);
-
-    int sfd = socket(AF_INET, SOCK_STREAM, 0);
-    assert(sfd >= 0, "socket");
-
-    struct sockaddr_in addr = {0};
-    addr.sin_family = AF_INET;
-    addr.sin_port = htons(8080);
-    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-
-    assert(
-        connect(sfd, (struct sockaddr *)&addr, sizeof(struct sockaddr_in)) != -1,
-        "connect");
 
     struct pollfd pfds[2] = {0};
     pfds[0].fd = STDIN_FILENO;
@@ -145,14 +145,16 @@ int main(void)
         if (ready == -1) {
             if (errno == EINTR)
                 continue;
-            err_exit("failed on poll syscall");
+            error("failed on poll syscall");
+            return -1;
         }
 
         if (pfds[0].revents & POLLIN) {
             nread = read(STDIN_FILENO, &ch, 1);
             if (nread == -1) {
                 close(sfd);
-                err_exit("read from stdin");
+                error("read from stdin");
+                return -1;
             }
             user_input(input_box, ch, sfd);
         }
@@ -165,7 +167,8 @@ int main(void)
             }
             if (nserv == -1) {
                 close(sfd);
-                err_exit("read from socket");
+                error("read from socket");
+                return -1;
             }
             char *nl = strchr(servr_buf, '\n');
             if (nl) {
@@ -186,14 +189,13 @@ int main(void)
     if (tcsetattr(STDIN_FILENO, TCSAFLUSH, &usertp) == -1)
         err_exit("tcsetattr");
 
+    scroll(2);
+
     return EXIT_SUCCESS;
 }
 
 int server_message(struct box *srv_box, struct box *usr_box, char *buf, size_t buflen)
 {
-    // TODO: remove
-    (void)usr_box;
-
     if (srv_box == NULL)
         return EINVAL;
 

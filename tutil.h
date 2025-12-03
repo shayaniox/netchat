@@ -7,7 +7,7 @@
 #define right(N) printf("\033[%dC", N)
 
 #define clrline() printf("\033[2K")
-#define clrscreen() printf("\033[2J")
+#define clrterminal() printf("\033[2J")
 
 #define srtaltbuf() printf("\033[?1049h")
 #define qtaltbuf() printf("\033[?1049l")
