@@ -1,19 +1,27 @@
-CC      := gcc
-CFLAGS  := -std=c11 -Wall -Wextra -g -I.
+CC        := gcc
+SRC_DIR   := src
+INC_DIR   := include
+BUILD_DIR := build
+BIN_FILE  := $(BUILD_DIR)/nchat
+
+CFLAGS  := -std=c11 -Wall -Wextra -g -I $(INC_DIR)
 LDFLAGS :=
 LDLIBS  :=
 
-srcfiles = $(wildcard *.c)
-objfiles = $(patsubst %.c,%.o,$(srcfiles))
+SRC_FILES := $(wildcard $(SRC_DIR)/*.c)
+OBJ_FILES := $(patsubst $(SRC_DIR)/%.c,$(BUILD_DIR)/%.o,$(SRC_FILES))
 
-run: main
-	@./main
-
-main: $(objfiles)
+$(BIN_FILE): $(OBJ_FILES)
 	$(CC) $(CFLAGS) $^ -o $@
 
-%.o: %.c
+$(BUILD_DIR)/%.o: $(SRC_DIR)/%.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
+$(BUILD_DIR):
+	@mkdir -p $(BUILD_DIR)
+
+install: $(BUILD_DIR)/$(BIN_FILE)
+	install -d
+
 clean:
-	rm -f main *.o
+	rm -rf $(BUILD_DIR)

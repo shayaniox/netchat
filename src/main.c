@@ -1,8 +1,8 @@
 #include "client.h"
 #include "errfunc.h"
-#include "log.h"
 #include "server.h"
 #include <getopt.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 

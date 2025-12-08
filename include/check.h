@@ -1,7 +1,6 @@
 #ifndef _CHECK_H
 #define _CHECK_H
 
-#include "errfunc.h"
 #include "log.h"
 
 #define assert(X, M, ...) \

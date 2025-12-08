@@ -56,3 +56,6 @@ dkms.conf
 
 main
 warmup/
+
+# Build artifacts
+build/
